@@ -107,20 +107,21 @@
   <div class="app">
     <h1>Allrecipes Macro Search</h1>
 
+    <!-- Worker base URL -->
     <div class="card">
       <div class="row">
         <div>
           <label for="worker-url">Worker base URL</label>
           <input type="text" id="worker-url"
-                 placeholder="https://your-worker-subdomain.workers.dev"
-                 />
+                 placeholder="https://your-worker-subdomain.workers.dev" />
         </div>
       </div>
       <p class="small">
-        Paste the URL of your Cloudflare Worker here (e.g. <code>https://something.workers.dev</code>).
+        Paste the URL of your Cloudflare Worker here (e.g. <code>https://macromatcher.pafischer1989.workers.dev</code>).
       </p>
     </div>
 
+    <!-- Search + target macros -->
     <div class="card">
       <div class="row">
         <div>
@@ -128,6 +129,8 @@
           <input type="text" id="search-term" placeholder="e.g. chicken breast, turkey, lasagna" />
         </div>
       </div>
+
+      <!-- Target as percentages -->
       <div class="row">
         <div>
           <label for="target-protein">% Protein</label>
@@ -145,10 +148,32 @@
       <p class="small">
         These are your <strong>desired macro percentages</strong> based on kcal. You can change them before each search.
       </p>
-      <button class="btn" id="search-btn">Search &amp; Rank</button>
+
+      <!-- Target as grams (with expressions) -->
+      <hr style="border:none;border-top:1px solid #2d3748;margin:8px 0;">
+      <p class="small"><strong>Optional:</strong> enter target as <em>grams</em> (expressions allowed, e.g. <code>228-68</code>) and convert to % automatically:</p>
+      <div class="row">
+        <div>
+          <label for="target-protein-g">Protein (g)</label>
+          <input type="text" id="target-protein-g" placeholder="e.g. 78 or 200-22" />
+        </div>
+        <div>
+          <label for="target-carbs-g">Carbs (g)</label>
+          <input type="text" id="target-carbs-g" placeholder="e.g. 200 or 228-68" />
+        </div>
+        <div>
+          <label for="target-fat-g">Fat (g)</label>
+          <input type="text" id="target-fat-g" placeholder="e.g. 28" />
+        </div>
+      </div>
+      <button class="btn" id="convert-grams-btn">Use grams as target (%)</button>
+      <p class="small" id="grams-status"></p>
+
+      <button class="btn" id="search-btn" style="margin-top:12px;">Search &amp; Rank</button>
       <p class="small" id="status"></p>
     </div>
 
+    <!-- Results -->
     <div class="card">
       <div id="results"></div>
     </div>
@@ -160,11 +185,18 @@
     const targetProteinInput = document.getElementById("target-protein");
     const targetCarbsInput = document.getElementById("target-carbs");
     const targetFatInput = document.getElementById("target-fat");
+
+    const targetProteinGInput = document.getElementById("target-protein-g");
+    const targetCarbsGInput = document.getElementById("target-carbs-g");
+    const targetFatGInput = document.getElementById("target-fat-g");
+    const convertGramsBtn = document.getElementById("convert-grams-btn");
+    const gramsStatusEl = document.getElementById("grams-status");
+
     const searchBtn = document.getElementById("search-btn");
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
 
-    // Remember worker URL & targets locally
+    // --- settings persistence ---
     function loadSettings() {
       try {
         const s = JSON.parse(localStorage.getItem("macroSearchSettings") || "{}");
@@ -197,6 +229,61 @@
       return "bad";
     }
 
+    // --- tiny expression parser for grams (supports + - * / . and parentheses) ---
+    function evalExpression(expr) {
+      if (!expr) return NaN;
+      const sanitized = String(expr).replace(/[^0-9.+\-*/()]/g, "");
+      if (!sanitized.trim()) return NaN;
+      try {
+        const fn = new Function('"use strict"; return (' + sanitized + ');');
+        const val = fn();
+        return typeof val === "number" && isFinite(val) ? val : NaN;
+      } catch (e) {
+        return NaN;
+      }
+    }
+
+    // Convert grams -> % based on kcal (4/4/9) and set target % fields
+    convertGramsBtn.addEventListener("click", () => {
+      const gP = evalExpression(targetProteinGInput.value);
+      const gC = evalExpression(targetCarbsGInput.value);
+      const gF = evalExpression(targetFatGInput.value);
+
+      if (!isFinite(gP) || !isFinite(gC) || !isFinite(gF)) {
+        gramsStatusEl.textContent = "Could not parse one or more gram values. Use numbers and + - * / only.";
+        return;
+      }
+      if (gP < 0 || gC < 0 || gF < 0) {
+        gramsStatusEl.textContent = "Gram values should not be negative.";
+        return;
+      }
+
+      const kcalP = gP * 4;
+      const kcalC = gC * 4;
+      const kcalF = gF * 9;
+      const totalKcal = kcalP + kcalC + kcalF;
+
+      if (!totalKcal) {
+        gramsStatusEl.textContent = "Total kcal is zero; please enter non-zero grams.";
+        return;
+      }
+
+      const pctP = (kcalP / totalKcal) * 100;
+      const pctC = (kcalC / totalKcal) * 100;
+      const pctF = (kcalF / totalKcal) * 100;
+
+      targetProteinInput.value = pctP.toFixed(1);
+      targetCarbsInput.value = pctC.toFixed(1);
+      targetFatInput.value = pctF.toFixed(1);
+
+      gramsStatusEl.textContent =
+        `Using ${gP.toFixed(1)} g P, ${gC.toFixed(1)} g C, ${gF.toFixed(1)} g F ` +
+        `→ ${pctP.toFixed(1)}% / ${pctC.toFixed(1)}% / ${pctF.toFixed(1)}% (kcal-based).`;
+
+      saveSettings();
+    });
+
+    // --- search & rank ---
     searchBtn.addEventListener("click", async () => {
       const workerBase = workerUrlInput.value.trim();
       const term = searchTermInput.value.trim();
