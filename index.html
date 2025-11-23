@@ -271,18 +271,22 @@
     }
 
     // --- tiny expression parser for grams (supports + - * / . and parentheses) ---
-    function evalExpression(expr) {
-      if (!expr) return NaN;
-      const sanitized = String(expr).replace(/[^0-9.+\\-*/()]/g, "");
-      if (!sanitized.trim()) return NaN;
-      try {
-        const fn = new Function('"use strict"; return (' + sanitized + ');');
-        const val = fn();
-        return typeof val === "number" && isFinite(val) ? val : NaN;
-      } catch (e) {
-        return NaN;
-      }
-    }
+function evalExpression(expr) {
+  if (!expr) return NaN;
+
+  // Allow digits, decimal point, + - * / and parentheses, strip everything else
+  const sanitized = String(expr).replace(/[^0-9.+\-*/()]/g, "");
+  if (!sanitized.trim()) return NaN;
+
+  try {
+    // Evaluate as a math expression
+    const fn = new Function('"use strict"; return (' + sanitized + ');');
+    const val = fn();
+    return typeof val === "number" && isFinite(val) ? val : NaN;
+  } catch (e) {
+    return NaN;
+  }
+}
 
     // Convert grams -> % based on kcal (4/4/9) and set target % fields
     convertGramsBtn.addEventListener("click", () => {
@@ -581,3 +585,4 @@
   </script>
 </body>
 </html>
+
