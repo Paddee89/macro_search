@@ -67,6 +67,11 @@
     .btn.secondary {
       background: #2d3748;
     }
+    .btn-xs {
+      padding: 3px 8px;
+      font-size: 0.7rem;
+      margin-top: 0;
+    }
     .small {
       font-size: 0.8rem;
       color: #a0aec0;
@@ -187,17 +192,30 @@
       <button class="btn secondary" id="convert-grams-btn">Use grams as target (%)</button>
       <p class="small" id="grams-status"></p>
 
-      <!-- Single search button -->
-      <button class="btn" id="search-btn" style="margin-top:12px;">
-        Search &amp; Rank (single recipe + all sides)
-      </button>
-      <p class="small" id="status"></p>
+      <!-- Single search buttons -->
+      <div class="row" style="margin-top:8px;">
+        <div>
+          <button class="btn" id="search-recipes-btn">
+            1️⃣ Search &amp; Rank (recipes only)
+          </button>
+        </div>
+        <div>
+          <button class="btn secondary" id="search-recipes-sides-btn">
+            2️⃣ Search &amp; Rank (recipes + all sides)
+          </button>
+        </div>
+      </div>
+      <p class="small">
+        After running (1), click <em>“Test sides”</em> on any recipe to get option (3): that one recipe
+        paired with all side dishes.
+      </p>
     </div>
 
     <!-- Combo search (main + side) -->
     <div class="card">
       <p class="small">
-        <strong>Combo search:</strong> find best pair of main + side matching your macros.
+        <strong>Combo search:</strong> find best pair of main + side matching your macros (from
+        recipes.json, not the generic plain sides above).
       </p>
       <div class="row">
         <div>
@@ -213,13 +231,28 @@
       <p class="small" id="combo-status"></p>
     </div>
 
-    <!-- Results -->
+    <!-- Results: recipes only -->
     <div class="card">
-      <h3 style="margin-top:0;font-size:1rem;">Single recipe + plain side results</h3>
-      <div id="results"></div>
-      <p class="small" id="single-note"></p>
+      <h3 style="margin-top:0;font-size:1rem;">Single recipe results (recipes only)</h3>
+      <div id="results-recipes"></div>
+      <p class="small" id="status-recipes"></p>
     </div>
 
+    <!-- Results: chosen recipe + all sides -->
+    <div class="card">
+      <h3 style="margin-top:0;font-size:1rem;">Selected recipe + all plain sides</h3>
+      <div id="results-selected-sides"></div>
+      <p class="small" id="status-selected-sides"></p>
+    </div>
+
+    <!-- Results: all recipes + all sides -->
+    <div class="card">
+      <h3 style="margin-top:0;font-size:1rem;">All recipes + all plain sides</h3>
+      <div id="results-all-combos"></div>
+      <p class="small" id="status-all-combos"></p>
+    </div>
+
+    <!-- Results: main + side from recipes.json -->
     <div class="card">
       <h3 style="margin-top:0;font-size:1rem;">Main + side combinations (from recipes.json)</h3>
       <div id="combo-results"></div>
@@ -244,15 +277,21 @@
     const convertGramsBtn = document.getElementById("convert-grams-btn");
     const gramsStatusEl = document.getElementById("grams-status");
 
-    const searchBtn = document.getElementById("search-btn");
+    const searchRecipesBtn = document.getElementById("search-recipes-btn");
+    const searchRecipesSidesBtn = document.getElementById("search-recipes-sides-btn");
     const comboBtn = document.getElementById("combo-btn");
 
-    const statusEl = document.getElementById("status");
+    const statusRecipesEl = document.getElementById("status-recipes");
+    const statusAllCombosEl = document.getElementById("status-all-combos");
+    const statusSelectedSidesEl = document.getElementById("status-selected-sides");
     const comboStatusEl = document.getElementById("combo-status");
 
-    const resultsEl = document.getElementById("results");
+    const resultsRecipesEl = document.getElementById("results-recipes");
+    const resultsAllCombosEl = document.getElementById("results-all-combos");
+    const resultsSelectedSidesEl = document.getElementById("results-selected-sides");
     const comboResultsEl = document.getElementById("combo-results");
-    const singleNoteEl = document.getElementById("single-note");
+
+    let lastRecipes = []; // for "Test sides" on recipes-only search
 
     // --- plain side dishes with typical macros per cooked serving ---
     // All values are approximate and meant for comparison, not precise tracking.
@@ -570,7 +609,7 @@
         `${workerBase.replace(/\/+$/, "")}/api/search` +
         `?q=${encodeURIComponent(term)}` +
         `&limit=${limit}` +
-        `&site=all`; // always search full recipes.json; worker filters internally by source if needed
+        `&site=all`;
 
       const resp = await fetch(url);
       if (!resp.ok) {
@@ -581,8 +620,8 @@
       return data.recipes.map(enrichRecipe).filter(Boolean);
     }
 
-    // --- single search & rank: try every side automatically ---
-    searchBtn.addEventListener("click", async () => {
+    // --- (1) Single search & rank: recipes only (original behavior) ---
+    searchRecipesBtn.addEventListener("click", async () => {
       const workerBase = workerUrlInput.value.trim();
       const term = searchTermInput.value.trim();
 
@@ -596,9 +635,11 @@
       }
 
       saveSettings();
-      statusEl.textContent = "Searching recipes and testing all side dish options…";
-      resultsEl.innerHTML = "";
-      singleNoteEl.textContent = "";
+      statusRecipesEl.textContent = "Searching and fetching nutrition…";
+      resultsRecipesEl.innerHTML = "";
+      // clear selected-sides view (option 3)
+      statusSelectedSidesEl.textContent = "";
+      resultsSelectedSidesEl.innerHTML = "";
 
       const targetP = parseFloat(targetProteinInput.value) || 0;
       const targetC = parseFloat(targetCarbsInput.value) || 0;
@@ -608,7 +649,198 @@
         const recipes = await fetchRecipes(workerBase, term, 40);
 
         if (!recipes.length) {
-          statusEl.textContent = "No recipes found with nutrition data.";
+          statusRecipesEl.textContent = "No recipes found with nutrition data.";
+          lastRecipes = [];
+          return;
+        }
+
+        recipes.forEach((r) => {
+          const dP = r.pctP - targetP;
+          const dC = r.pctC - targetC;
+          const dF = r.pctF - targetF;
+          r.distance = Math.sqrt(dP*dP + dC*dC + dF*dF);
+        });
+
+        recipes.sort((a, b) => a.distance - b.distance);
+        lastRecipes = recipes;
+
+        statusRecipesEl.textContent = `Found ${recipes.length} recipes. Showing best matches.`;
+
+        let html = `
+          <table>
+            <thead>
+              <tr>
+                <th class="name-cell">Recipe</th>
+                <th>kcal</th>
+                <th>P %</th>
+                <th>C %</th>
+                <th>F %</th>
+                <th>Distance</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        recipes.forEach((r, i) => {
+          const cls = classifyScore(r.distance);
+          const clsName =
+            cls === "good" ? "score-good" : cls === "ok" ? "score-ok" : "score-bad";
+
+          html += `
+            <tr>
+              <td class="name-cell">
+                ${i === 0 ? `<span class="chip">Best match</span>` : ""}
+                <a href="${r.url}" target="_blank" rel="noopener noreferrer"
+                   style="color:#f4c95d; text-decoration:none;">
+                  ${r.title}
+                </a>
+              </td>
+              <td>${r.totalKcal.toFixed(0)}</td>
+              <td>${r.pctP.toFixed(1)}</td>
+              <td>${r.pctC.toFixed(1)}</td>
+              <td>${r.pctF.toFixed(1)}</td>
+              <td class="${clsName}">${r.distance.toFixed(1)}</td>
+              <td>
+                <button class="btn secondary btn-xs test-sides-btn" data-index="${i}">
+                  Test sides
+                </button>
+              </td>
+            </tr>
+          `;
+        });
+
+        html += `</tbody></table>`;
+        resultsRecipesEl.innerHTML = html;
+
+        // Attach click handlers for "Test sides" (option 3)
+        const testButtons = resultsRecipesEl.querySelectorAll(".test-sides-btn");
+        testButtons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.index, 10);
+            const recipe = lastRecipes[idx];
+            if (recipe) {
+              computeAndRenderSidesForRecipe(recipe);
+            }
+          });
+        });
+      } catch (e) {
+        console.error(e);
+        statusRecipesEl.textContent = "Error during search. See console for details.";
+        lastRecipes = [];
+      }
+    });
+
+    // --- (3) Selected recipe + all sides ---
+    function computeAndRenderSidesForRecipe(recipe) {
+      const targetP = parseFloat(targetProteinInput.value) || 0;
+      const targetC = parseFloat(targetCarbsInput.value) || 0;
+      const targetF = parseFloat(targetFatInput.value) || 0;
+
+      const sideEntries = Object.entries(SIDE_DISHES);
+      const combos = [];
+
+      for (const [sideKey, side] of sideEntries) {
+        const combined = combineWithSide(recipe, sideKey);
+        if (!combined) continue;
+
+        const dP = combined.pctP - targetP;
+        const dC = combined.pctC - targetC;
+        const dF = combined.pctF - targetF;
+        const distance = Math.sqrt(dP*dP + dC*dC + dF*dF);
+
+        combos.push({
+          ...combined,
+          baseRecipe: recipe,
+          sideKey,
+          sideLabel: side.label,
+          distance,
+        });
+      }
+
+      if (!combos.length) {
+        statusSelectedSidesEl.textContent = "No valid recipe + side combinations.";
+        resultsSelectedSidesEl.innerHTML = "";
+        return;
+      }
+
+      combos.sort((a, b) => a.distance - b.distance);
+      const TOP_N = 30;
+      const topCombos = combos.slice(0, TOP_N);
+
+      statusSelectedSidesEl.textContent =
+        `Base recipe: "${recipe.title}". Showing best ${topCombos.length} side options.`;
+
+      let html = `
+        <div class="small" style="margin-bottom:4px;">
+          Each row is this recipe paired with one plain side dish.
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th class="name-cell">Side</th>
+              <th>kcal</th>
+              <th>P %</th>
+              <th>C %</th>
+              <th>F %</th>
+              <th>Distance</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      topCombos.forEach((c, i) => {
+        const cls = classifyScore(c.distance);
+        const clsName =
+          cls === "good" ? "score-good" : cls === "ok" ? "score-ok" : "score-bad";
+
+        html += `
+          <tr>
+            <td class="name-cell">
+              ${i === 0 ? `<span class="chip">Best side</span>` : ""}
+              ${c.sideLabel}
+            </td>
+            <td>${c.totalKcal.toFixed(0)}</td>
+            <td>${c.pctP.toFixed(1)}</td>
+            <td>${c.pctC.toFixed(1)}</td>
+            <td>${c.pctF.toFixed(1)}</td>
+            <td class="${clsName}">${c.distance.toFixed(1)}</td>
+          </tr>
+        `;
+      });
+
+      html += `</tbody></table>`;
+      resultsSelectedSidesEl.innerHTML = html;
+    }
+
+    // --- (2) Single search & rank: all recipes + all sides ---
+    searchRecipesSidesBtn.addEventListener("click", async () => {
+      const workerBase = workerUrlInput.value.trim();
+      const term = searchTermInput.value.trim();
+
+      if (!workerBase) {
+        alert("Please enter your Worker base URL.");
+        return;
+      }
+      if (!term) {
+        alert("Please enter a search term.");
+        return;
+      }
+
+      saveSettings();
+      statusAllCombosEl.textContent =
+        "Searching recipes and testing all side dish options…";
+      resultsAllCombosEl.innerHTML = "";
+
+      const targetP = parseFloat(targetProteinInput.value) || 0;
+      const targetC = parseFloat(targetCarbsInput.value) || 0;
+      const targetF = parseFloat(targetFatInput.value) || 0;
+
+      try {
+        const recipes = await fetchRecipes(workerBase, term, 40);
+
+        if (!recipes.length) {
+          statusAllCombosEl.textContent = "No recipes found with nutrition data.";
           return;
         }
 
@@ -636,7 +868,8 @@
         }
 
         if (!combos.length) {
-          statusEl.textContent = "No valid recipe + side combinations (missing macros).";
+          statusAllCombosEl.textContent =
+            "No valid recipe + side combinations (missing macros).";
           return;
         }
 
@@ -644,13 +877,9 @@
         const TOP_N = 50;
         const topCombos = combos.slice(0, TOP_N);
 
-        statusEl.textContent =
+        statusAllCombosEl.textContent =
           `Found ${recipes.length} recipes → ${combos.length} recipe+side combinations. ` +
           `Showing best ${topCombos.length}.`;
-
-        singleNoteEl.textContent =
-          "Each row is a single recipe paired with exactly one plain side (including the 'no side' option). " +
-          "Macros and kcal are for the combined plate.";
 
         let html = `
           <table>
@@ -695,10 +924,11 @@
         });
 
         html += `</tbody></table>`;
-        resultsEl.innerHTML = html;
+        resultsAllCombosEl.innerHTML = html;
       } catch (e) {
         console.error(e);
-        statusEl.textContent = "Error during search. See console for details.";
+        statusAllCombosEl.textContent =
+          "Error during recipe+side search. See console for details.";
       }
     });
 
